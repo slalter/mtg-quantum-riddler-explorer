@@ -377,20 +377,36 @@ SURVEIL_DUAL_LANDS = {"Meticulous Archive", "Elegant Parlor", "Thundering Falls"
 # Combined: lands that ETB tapped under some condition AND have no life cost.
 ETB_MAYBE_TAPPED_LANDS = SURVEIL_DUAL_LANDS | FAST_LANDS
 
-# Probability a fresh shock is played UNTAPPED (paying 2 life) by turn —
-# captures the user's insight that shock damage scales with whether you
-# need the colors immediately. Early game = need it untapped (high P).
-# Late game = often you can ETB tapped (low P).
-P_SHOCK_UNTAPPED_BY_TURN = {
-    1: 1.00, 2: 0.95, 3: 0.90,
-    4: 0.70, 5: 0.50, 6: 0.30,
-}
 # Mid-turn fetched shocks: you cracked the fetch DURING the turn, almost
 # always because you need the color now → almost always untapped.
 P_FETCHED_SHOCK_UNTAPPED = 0.92
 
 
-def color_reliability_score(deck_def, n=4000, return_parts=False):
+def p_shock_untapped_by_turn(turn, sim_result=None):
+    """P(a hardcast shock plays UNTAPPED, paying 2 life) on a given turn.
+
+    Per user feedback: this should be computed CENTRALLY from sim data —
+    "how likely we are to spend a certain amount of mana on a certain
+    turn". If sim_result provides p_spell_cast_T{n}, use it directly:
+    if we cast a spell, we needed the mana, so the shock came in untapped.
+
+    Falls back to a hardcoded curve if no sim data available (e.g. when
+    color_reliability_score is called standalone for testing).
+    """
+    if sim_result is not None:
+        p = sim_result["misc"].get(f"p_spell_cast_T{turn}")
+        if p is not None:
+            # If we cast a spell, the shock had to be untapped; otherwise
+            # we'd have ETB'd tapped. Add a small ~0.10 probability for
+            # "hold-up mana" turns (you might still want untapped even
+            # without casting, e.g., pass-with-removal).
+            return min(1.0, p + 0.10)
+    # Fallback hardcoded curve
+    fallback = {1: 0.95, 2: 0.85, 3: 0.75, 4: 0.55, 5: 0.40, 6: 0.25}
+    return fallback.get(turn, 0.20)
+
+
+def color_reliability_score(deck_def, n=4000, return_parts=False, sim_result=None):
     """Direct measurement of manabase quality + life safety.
 
     Simulates land-draw + fetch-cracking against THIS deck's specific
@@ -418,22 +434,24 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
     import random
     from simulate import build_deck, CARDS
 
-    # Reuse the simulator's fetch-target list — it knows which shocks
-    # each fetch reaches via type-line. Surveil duals listed first
-    # (preferred over shocks: no life cost + surveil 1).
+    # Shocks first (untapped, paid 2 life — usable this turn).
+    # Surveil duals only fetched if a shock isn't needed.
     FETCH_TARGETS = {
-        "Scalding Tarn":     ["Meticulous Archive", "Thundering Falls", "Elegant Parlor",
-                              "Steam Vents", "Hallowed Fountain", "Sacred Foundry", "Island", "Mountain"],
-        "Arid Mesa":         ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
-                              "Sacred Foundry", "Hallowed Fountain", "Steam Vents", "Mountain", "Plains"],
-        "Flooded Strand":    ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
-                              "Hallowed Fountain", "Sacred Foundry", "Steam Vents", "Plains", "Island"],
-        "Misty Rainforest":  ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
-        "Polluted Delta":    ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
-        "Marsh Flats":       ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
-        "Wooded Foothills":  ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
-        "Bloodstained Mire": ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
-        "Windswept Heath":   ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
+        "Scalding Tarn":     ["Steam Vents", "Hallowed Fountain", "Sacred Foundry",
+                              "Meticulous Archive", "Thundering Falls", "Elegant Parlor",
+                              "Island", "Mountain"],
+        "Arid Mesa":         ["Sacred Foundry", "Hallowed Fountain", "Steam Vents",
+                              "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                              "Mountain", "Plains"],
+        "Flooded Strand":    ["Hallowed Fountain", "Sacred Foundry", "Steam Vents",
+                              "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                              "Plains", "Island"],
+        "Misty Rainforest":  ["Hallowed Fountain", "Steam Vents", "Meticulous Archive", "Thundering Falls", "Island"],
+        "Polluted Delta":    ["Hallowed Fountain", "Steam Vents", "Meticulous Archive", "Thundering Falls", "Island"],
+        "Marsh Flats":       ["Sacred Foundry", "Hallowed Fountain", "Meticulous Archive", "Elegant Parlor", "Plains"],
+        "Wooded Foothills":  ["Sacred Foundry", "Steam Vents", "Elegant Parlor", "Thundering Falls", "Mountain"],
+        "Bloodstained Mire": ["Sacred Foundry", "Steam Vents", "Elegant Parlor", "Thundering Falls", "Mountain"],
+        "Windswept Heath":   ["Sacred Foundry", "Hallowed Fountain", "Meticulous Archive", "Elegant Parlor", "Plains"],
     }
 
     def land_colors_now(card):
@@ -544,10 +562,9 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
                             in_play.append((fetched, False))
                 else:
                     if play in SHOCK_LANDS:
-                        # Hardcast shock: turn-conditional damage. Early game
-                        # you NEED untapped (high P); late game you can ETB
-                        # tapped (low P).
-                        p_untapped = P_SHOCK_UNTAPPED_BY_TURN.get(turn, 0.20)
+                        # Hardcast shock: turn-conditional damage driven by
+                        # sim-measured P(spell cast this turn).
+                        p_untapped = p_shock_untapped_by_turn(turn, sim_result)
                         if random.random() < p_untapped:
                             damage += 2
                             in_play.append((play, False))
@@ -663,7 +680,7 @@ def composite_score(deck_def, sim_result, weights=(0.40, 0.20, 0.10, 0.10, 0.20)
     cast = castability_score(sim_result, deck_def)
     eff = mana_efficiency_score(sim_result)
     flood = stuff_to_do_score(sim_result)
-    color = color_reliability_score(deck_def, n=color_n)
+    color = color_reliability_score(deck_def, n=color_n, sim_result=sim_result)
     power_normalized = power * 10
     score = (weights[0] * power_normalized + weights[1] * cast +
              weights[2] * eff + weights[3] * flood + weights[4] * color)

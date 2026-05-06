@@ -131,25 +131,45 @@ def color_count(land_colors, color):
     return sum(1 for s in land_colors if color in s)
 
 def pick_land(hand, battlefield, turn):
-    """Heuristic land choice: prioritize colors we lack."""
+    """Heuristic land choice: prioritize untapped > colors > basic.
+
+    Real players hold tap-lands when an untapped option is available, even
+    if the tap-land would add a new color. A 2-color tap-land played T1
+    means no T1 spell — usually worse than a 1-color basic that lets you
+    cast Erode/Path/Galvanic immediately.
+
+    Exception: late game (turn ≥ 5) when we likely have spare mana and
+    haven't cast anything this turn anyway, prefer color count.
+    """
     lands = [c for c in hand if CARDS[c]["land"]]
     if not lands:
         return None
     have = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
-    # We want W, U, R coverage. C-only lands are last resort.
+
+    # In early game, untapped dominates. In late game, colors matter more
+    # (we can absorb a tap-land turn without losing tempo).
+    early_game = turn <= 4
+
     def score(l):
         produces = CARDS[l]["produces"]
         new_colors = produces - have
         is_C_only = produces == frozenset({"C"})
         is_basic = CARDS[l]["basic"]
         is_tapped = CARDS[l]["tapped"]
-        # Lower score = better
-        return (
-            -len(new_colors),     # prefer new-color lands
-            is_C_only,            # avoid colorless if possible
-            is_tapped,            # prefer untapped
-            not is_basic,         # prefer basics over duals (bait less)
-        )
+        if early_game:
+            return (
+                is_tapped,            # untapped dominates early
+                is_C_only,            # then avoid colorless
+                -len(new_colors),     # then color gain
+                not is_basic,         # then prefer basics
+            )
+        else:
+            return (
+                -len(new_colors),     # late game: color count first
+                is_C_only,
+                is_tapped,
+                not is_basic,
+            )
     lands.sort(key=score)
     return lands[0]
 
@@ -192,23 +212,26 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
             if land:
                 hand.remove(land)
                 # Fetchlands: crack immediately. Fetch goes to yard, replaced by best dual.
-                # Surveil duals listed BEFORE shocks: preferred fetch target
-                # (no life cost + surveil 1).
+                # Fetch priority: shocks FIRST (they ETB untapped, you can cast
+                # this turn). Surveil duals are valid fetch targets but only
+                # taken when no shock is needed — that's handled below by
+                # checking if the player needs untapped mana this turn.
                 FETCH_TARGETS = {
-                    "Scalding Tarn":      ["Meticulous Archive", "Thundering Falls", "Elegant Parlor",
-                                           "Steam Vents", "Hallowed Fountain", "Sacred Foundry", "Island", "Mountain"],
-                    "Arid Mesa":          ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
-                                           "Sacred Foundry", "Hallowed Fountain", "Steam Vents", "Mountain", "Plains"],
-                    "Flooded Strand":     ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
-                                           "Hallowed Fountain", "Sacred Foundry", "Steam Vents", "Plains", "Island"],
-                    # Off-color fetches: list ONLY shocks they can actually find via subtypes,
-                    # then the 1 basic they reach. Lose flexibility vs in-color fetches.
-                    "Misty Rainforest":   ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
-                    "Polluted Delta":     ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
-                    "Marsh Flats":        ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
-                    "Wooded Foothills":   ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
-                    "Bloodstained Mire":  ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
-                    "Windswept Heath":    ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
+                    "Scalding Tarn":      ["Steam Vents", "Hallowed Fountain", "Sacred Foundry",
+                                           "Meticulous Archive", "Thundering Falls", "Elegant Parlor",
+                                           "Island", "Mountain"],
+                    "Arid Mesa":          ["Sacred Foundry", "Hallowed Fountain", "Steam Vents",
+                                           "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                                           "Mountain", "Plains"],
+                    "Flooded Strand":     ["Hallowed Fountain", "Sacred Foundry", "Steam Vents",
+                                           "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                                           "Plains", "Island"],
+                    "Misty Rainforest":   ["Hallowed Fountain", "Steam Vents", "Meticulous Archive", "Thundering Falls", "Island"],
+                    "Polluted Delta":     ["Hallowed Fountain", "Steam Vents", "Meticulous Archive", "Thundering Falls", "Island"],
+                    "Marsh Flats":        ["Sacred Foundry", "Hallowed Fountain", "Meticulous Archive", "Elegant Parlor", "Plains"],
+                    "Wooded Foothills":   ["Sacred Foundry", "Steam Vents", "Elegant Parlor", "Thundering Falls", "Mountain"],
+                    "Bloodstained Mire":  ["Sacred Foundry", "Steam Vents", "Elegant Parlor", "Thundering Falls", "Mountain"],
+                    "Windswept Heath":    ["Sacred Foundry", "Hallowed Fountain", "Meticulous Archive", "Elegant Parlor", "Plains"],
                 }
                 if land in FETCH_TARGETS:
                     graveyard.append(land)  # fetchland goes to yard
@@ -421,6 +444,7 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
             else:  # turns 9-12: anything castable
                 cast_priorities = ["Phlage", "Quantum Riddler", "Solitude", "Cleansing Wildfire", "Price of Freedom", "Erode", "Path to Exile", "Phelia", "White Orchid Phantom", "Galvanic Discharge", "Wrath of the Skies"]
 
+            spell_cast_this_turn = False
             for spell in cast_priorities:
                 if spell not in hand:
                     continue
@@ -440,6 +464,7 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
                     hand.remove(spell)
                     graveyard.append(spell)  # spell goes to yard
                     casts.append(spell)
+                    spell_cast_this_turn = True
                     # Engine cards force opp to search a basic when cast on opp board/lands
                     if spell in ("Erode", "Path to Exile", "Cleansing Wildfire", "Price of Freedom"):
                         basics_tutored += 1
@@ -449,6 +474,12 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
                     if spell == "Galvanic Discharge":
                         energy_banked += 2  # bank 2/3 (1 used as removal)
                     break  # one spell per turn
+
+            # Per user: track P(spell cast on turn N). Used by score.py to
+            # compute shock-untapped probability from sim data instead of a
+            # hardcoded curve. Centralized so other components can reuse it.
+            if spell_cast_this_turn:
+                misc[f"spell_cast_T{turn}"] += 1
 
         if max_qrs_in_hand >= 2:
             misc["qr_flood_2plus"] += 1
@@ -488,6 +519,10 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
         "pct_non_land_zero_T8": misc.get("non_land_zero_T8", 0) / trials * 100,
         "pct_non_land_zero_T10": misc.get("non_land_zero_T10", 0) / trials * 100,
         "pct_non_land_zero_T12": misc.get("non_land_zero_T12", 0) / trials * 100,
+        # P(spell cast on turn N) — sim-measured. Used by score.py to model
+        # shock-untapped damage probability and other turn-conditional decisions.
+        **{f"p_spell_cast_T{t}": misc.get(f"spell_cast_T{t}", 0) / trials
+           for t in range(1, max_turn + 1)},
     }
     return result
 
