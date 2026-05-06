@@ -180,9 +180,14 @@ COST_MAP = {
 
 CAST_PRIORITIES_BY_TURN = {
     1: ["Erode", "Path to Exile", "Galvanic Discharge"],
-    2: ["Cleansing Wildfire", "Price of Freedom", "Phelia", "Erode", "Path to Exile", "Galvanic Discharge"],
-    3: ["Phlage", "Cleansing Wildfire", "Price of Freedom", "White Orchid Phantom", "Phelia"],
-    4: ["Wrath of the Skies", "Wrath of God", "The Legend of Roku", "Cleansing Wildfire", "Price of Freedom", "White Orchid Phantom"],
+    # T2 expanded: Phantom (WW), Snapcaster (U+1) are real T2 plays. Including
+    # them in pick_land's optimization target keeps WW + UU castability up.
+    2: ["White Orchid Phantom", "Cleansing Wildfire", "Price of Freedom", "Phelia",
+        "Snapcaster Mage", "Erode", "Path to Exile", "Galvanic Discharge"],
+    3: ["Phlage", "Cleansing Wildfire", "Price of Freedom", "White Orchid Phantom", "Phelia",
+        "Snapcaster Mage"],
+    4: ["Wrath of the Skies", "Wrath of God", "The Legend of Roku", "Cleansing Wildfire",
+        "Price of Freedom", "White Orchid Phantom", "Snapcaster Mage"],
     5: ["Quantum Riddler", "Solitude", "Cleansing Wildfire", "Price of Freedom", "Phlage", "Erode"],
 }
 
@@ -229,23 +234,62 @@ def pick_land(hand, battlefield, turn, hand_cast_priorities=None, library=None):
 
     def _score_target_outcome(target):
         """Score a single fetch target / land outcome by option_value of the
-        spells it enables PLUS small bonuses for surveil + future-color."""
+        spells it enables PLUS bonuses for surveil + future-color.
+
+        Per user: surveil 1 ≈ half a card. Bumped surveil_bonus from 0.5 to 1.0
+        priority units (priorities are 1-N where N is len(priority_list);
+        a 0.5-card surveil maps to ~1 priority unit on the typical scale).
+
+        Per user: a shock can ETB TAPPED when we don't need it untapped now.
+        For fetched shocks where existing battlefield can already pay the
+        priority cast, prefer tapped (0 damage). Captures: every shock fetch
+        has the option to defer the life cost.
+        """
         produces = CARDS[target]["produces"]
-        is_tapped = CARDS[target]["tapped"]
+        is_intrinsically_tapped = CARDS[target]["tapped"]
         is_shock = target in SHOCK_LANDS_SET
         is_surveil = target in SURVEIL_DUAL_LANDS_SET
-        if is_tapped:
+
+        # For shocks: choose tapped vs untapped based on whether we need
+        # the new shock's mana untapped THIS turn for a priority cast.
+        if is_shock:
+            avail_existing = [CARDS[l]["produces"] for l in battlefield
+                              if not CARDS[l]["tapped"]]
+            avail_with_untapped = avail_existing + [produces]
+            castable_existing = [s for s in spells_in_hand
+                                 if can_pay_cost(avail_existing, COST_MAP[s])]
+            castable_untapped = [s for s in spells_in_hand
+                                 if can_pay_cost(avail_with_untapped, COST_MAP[s])]
+            opt_existing = option_value(castable_existing, hand_cast_priorities)
+            opt_untapped = option_value(castable_untapped, hand_cast_priorities)
+            # Untapped only worth -2 life if it ENABLES additional plays
+            if opt_untapped > opt_existing:
+                will_be_tapped = False  # take the damage; the cast is worth it
+                opt_now = opt_untapped
+            else:
+                will_be_tapped = True  # no spell gain — ETB tapped, save life
+                opt_now = opt_existing
+        elif is_intrinsically_tapped:
+            will_be_tapped = True
             avail_after = [CARDS[l]["produces"] for l in battlefield
                            if not CARDS[l]["tapped"]]
+            castable = [s for s in spells_in_hand if can_pay_cost(avail_after, COST_MAP[s])]
+            opt_now = option_value(castable, hand_cast_priorities)
         else:
+            will_be_tapped = False
             avail_after = [CARDS[l]["produces"] for l in battlefield
                            if not CARDS[l]["tapped"]] + [produces]
-        castable_now = [s for s in spells_in_hand if can_pay_cost(avail_after, COST_MAP[s])]
-        opt_now = option_value(castable_now, hand_cast_priorities)
+            castable = [s for s in spells_in_hand if can_pay_cost(avail_after, COST_MAP[s])]
+            opt_now = option_value(castable, hand_cast_priorities)
+
         new_colors = len(set(produces) - have_colors - {"C"})
-        bonus = (0.5 if is_surveil else 0.0) + 0.4 * new_colors
-        damage_penalty = 0.4 if (is_shock and not is_tapped) else 0.0
-        return opt_now + bonus - damage_penalty
+        # Surveil 1 ≈ 0.5 cards drawn equivalent (per user)
+        SURVEIL_VALUE = 1.0
+        surveil_bonus = SURVEIL_VALUE if is_surveil else 0.0
+        future_color_bonus = 0.4 * new_colors
+        # Damage only if shock came in untapped
+        damage_penalty = 0.4 if (is_shock and not will_be_tapped) else 0.0
+        return opt_now + surveil_bonus + future_color_bonus - damage_penalty
 
     def land_eval(land):
         """Score this land by option_value.
@@ -403,6 +447,13 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
         basics_tutored = 0
         # Cumulative energy banked from Galvanic casts (this trial)
         energy_banked = 0
+        # Shock instances that ETB'd tapped (per battlefield index). Cleared
+        # after the turn they came in. Per user: shocks can come in tapped
+        # to avoid life cost when not needed untapped now.
+        shock_etb_tapped_idxs = set()
+        # Tracks which turn each battlefield slot was played, so we know when
+        # to clear shock_etb_tapped_idxs (tapped lands untap next turn).
+        bf_played_turn = []
 
         # Mulligan-keepable
         land_count_open = sum(1 for c in hand if CARDS[c]["land"])
@@ -410,6 +461,9 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
             misc["keep_open"] += 1
 
         for turn in range(1, max_turn + 1):
+            # Untap step: shocks that ETB'd tapped last turn untap now.
+            shock_etb_tapped_idxs.clear()
+
             # 1. Draw
             if not (on_play and turn == 1) and library:
                 hand.append(library.pop(0))
@@ -444,28 +498,43 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
                 }
                 if land in FETCH_TARGETS:
                     graveyard.append(land)  # fetchland goes to yard
-                    # Context-aware target choice (per user feedback —
-                    # "the optionality there is important"). _best_fetch_target
-                    # decides:
-                    #   - shock (untapped, -2 life) if needed for a cast this turn
-                    #   - surveil dual (no damage + surveil) if no immediate cast
-                    #   - shock for color-fixing if no surveil dual reachable
-                    #   - basic as last resort
                     spells_in_hand = [s for s in cast_pri_now if s in hand and s in COST_MAP]
                     best = _best_fetch_target(land, battlefield, library, spells_in_hand, hand, turn)
                     if best is not None:
                         library.remove(best)
                         battlefield.append(best)
+                        # Per user: shocks can ETB tapped (no damage) when we
+                        # don't need them untapped this turn. If the existing
+                        # battlefield can already pay our priority cast, fetch
+                        # the shock TAPPED — no life cost.
+                        if best in SHOCK_LANDS_SET:
+                            avail_existing = [CARDS[l]["produces"] for i, l in enumerate(battlefield[:-1])
+                                              if not CARDS[l]["tapped"]
+                                              and i not in shock_etb_tapped_idxs]
+                            avail_with = avail_existing + [CARDS[best]["produces"]]
+                            needs_untapped = False
+                            for spell in cast_pri_now:
+                                if spell not in hand or spell not in COST_MAP:
+                                    continue
+                                cost = COST_MAP[spell]
+                                if not can_pay_cost(avail_existing, cost) and can_pay_cost(avail_with, cost):
+                                    needs_untapped = True
+                                    break
+                            if not needs_untapped:
+                                shock_etb_tapped_idxs.add(len(battlefield) - 1)
                 else:
                     battlefield.append(land)
 
             # 3. Compute available mana (untapped lands)
             avail = []
             for i, l in enumerate(battlefield):
-                # Skip the just-played tapped land for this turn
                 produces = CARDS[l]["produces"]
-                # Sunken Citadel ETBT — skip if just played
+                # Skip just-played intrinsically-tapped land for this turn
                 if CARDS[l]["tapped"] and i == len(battlefield) - 1:
+                    continue
+                # Skip shocks that ETB'd tapped this turn (per user: shock can
+                # come in tapped to avoid life cost). Cleared at end of turn.
+                if i in shock_etb_tapped_idxs:
                     continue
                 avail.append(produces)
 
