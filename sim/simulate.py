@@ -130,48 +130,216 @@ def can_pay_cost(land_colors, cost):
 def color_count(land_colors, color):
     return sum(1 for s in land_colors if color in s)
 
-def pick_land(hand, battlefield, turn):
-    """Heuristic land choice: prioritize untapped > colors > basic.
+# Spell cost map shared between pick_land's lookahead and the actual cast loop.
+COST_MAP = {
+    "Erode": {"W": 1}, "Path to Exile": {"W": 1}, "Galvanic Discharge": {"R": 1},
+    "Cleansing Wildfire": {"R": 1, "G": 1}, "Price of Freedom": {"R": 1, "G": 1},
+    "Phelia": {"W": 1, "G": 1}, "White Orchid Phantom": {"W": 2},
+    "Phlage": {"R": 1, "W": 1, "G": 1},
+    "Wrath of the Skies": {"W": 2, "G": 2}, "Wrath of God": {"W": 2, "G": 2},
+    "The Legend of Roku": {"R": 2, "G": 2},
+    "Quantum Riddler": {"U": 2, "G": 3},
+    "Solitude": {"W": 1, "G": 4},
+    "Snapcaster Mage": {"U": 1, "G": 1},
+    "Ephemerate": {"W": 1},
+}
 
-    Real players hold tap-lands when an untapped option is available, even
-    if the tap-land would add a new color. A 2-color tap-land played T1
-    means no T1 spell — usually worse than a 1-color basic that lets you
-    cast Erode/Path/Galvanic immediately.
+CAST_PRIORITIES_BY_TURN = {
+    1: ["Erode", "Path to Exile", "Galvanic Discharge"],
+    2: ["Cleansing Wildfire", "Price of Freedom", "Phelia", "Erode", "Path to Exile", "Galvanic Discharge"],
+    3: ["Phlage", "Cleansing Wildfire", "Price of Freedom", "White Orchid Phantom", "Phelia"],
+    4: ["Wrath of the Skies", "Wrath of God", "The Legend of Roku", "Cleansing Wildfire", "Price of Freedom", "White Orchid Phantom"],
+    5: ["Quantum Riddler", "Solitude", "Cleansing Wildfire", "Price of Freedom", "Phlage", "Erode"],
+}
 
-    Exception: late game (turn ≥ 5) when we likely have spare mana and
-    haven't cast anything this turn anyway, prefer color count.
+def _avail_from_battlefield(battlefield, just_played_idx=None):
+    """Compute available untapped color sources from battlefield. Skips a
+    just-played tapped land (it ETB'd this turn)."""
+    avail = []
+    for i, l in enumerate(battlefield):
+        if CARDS[l]["tapped"] and i == just_played_idx:
+            continue
+        avail.append(CARDS[l]["produces"])
+    return avail
+
+
+def pick_land(hand, battlefield, turn, hand_cast_priorities=None, library=None):
+    """Context-aware land choice. Tries each land option in hand and picks
+    the one that ENABLES the highest-priority cast this turn. Falls back to
+    color-fixing heuristic when no spell is castable regardless of choice.
+
+    Reasoning:
+      - For each land L in hand, simulate playing L (and cracking if fetch).
+      - Compute available mana given L is in play.
+      - Find the highest-priority spell in cast_priorities that becomes
+        castable with L played.
+      - Pick L with the highest-priority enabling spell.
+      - Tie-break: prefer untapped result, then color count, then basic.
+
+    This captures the user's insight: pick_land shouldn't be a static
+    sequence — it should depend on what we have in hand and what we'd
+    like to cast.
     """
     lands = [c for c in hand if CARDS[c]["land"]]
     if not lands:
         return None
-    have = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
 
-    # In early game, untapped dominates. In late game, colors matter more
-    # (we can absorb a tap-land turn without losing tempo).
+    if hand_cast_priorities is None:
+        hand_cast_priorities = CAST_PRIORITIES_BY_TURN.get(turn, [])
+
+    # Castable spells we care about, in priority order
+    spells_in_hand = [s for s in hand_cast_priorities if s in hand and s in COST_MAP]
+
+    have_colors = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
     early_game = turn <= 4
 
-    def score(l):
-        produces = CARDS[l]["produces"]
-        new_colors = produces - have
-        is_C_only = produces == frozenset({"C"})
-        is_basic = CARDS[l]["basic"]
-        is_tapped = CARDS[l]["tapped"]
-        if early_game:
-            return (
-                is_tapped,            # untapped dominates early
-                is_C_only,            # then avoid colorless
-                -len(new_colors),     # then color gain
-                not is_basic,         # then prefer basics
-            )
+    def land_eval(land):
+        """Returns (priority_index_of_enabled_spell, is_tapped, -new_color_gain, not_is_basic).
+
+        Lower tuple = better. priority_index 0 = best spell enabled,
+        len(spells) = no spell enabled (fall back to fixing).
+        """
+        # Determine effective produces if this is a fetch (it'll resolve)
+        if library is not None and land in FETCH_TARGETS_FOR_PICK:
+            # Find best fetchable target — iterate priority list
+            target = _best_fetch_target(land, battlefield, library, spells_in_hand, hand, turn)
+            effective_produces = CARDS[target]["produces"] if target else CARDS[land]["produces"]
+            effective_tapped = CARDS[target]["tapped"] if target else False
         else:
-            return (
-                -len(new_colors),     # late game: color count first
-                is_C_only,
-                is_tapped,
-                not is_basic,
-            )
-    lands.sort(key=score)
+            effective_produces = CARDS[land]["produces"]
+            effective_tapped = CARDS[land]["tapped"]
+
+        # If this land would be tapped, it doesn't add to avail this turn.
+        if effective_tapped:
+            avail_after = [CARDS[l]["produces"] for l in battlefield
+                           if not CARDS[l]["tapped"]]
+        else:
+            avail_after = [CARDS[l]["produces"] for l in battlefield
+                           if not CARDS[l]["tapped"]] + [effective_produces]
+
+        # Find best enabled spell
+        best_idx = len(spells_in_hand)
+        for idx, spell in enumerate(spells_in_hand):
+            if can_pay_cost(avail_after, COST_MAP[spell]):
+                best_idx = idx
+                break
+
+        is_tapped = effective_tapped
+        new_color_gain = len(set(effective_produces) - have_colors - {"C"})
+        is_basic = CARDS[land]["basic"]
+
+        if early_game:
+            return (best_idx, is_tapped, -new_color_gain, not is_basic)
+        else:
+            return (best_idx, -new_color_gain, is_tapped, not is_basic)
+
+    lands.sort(key=land_eval)
     return lands[0]
+
+
+def _best_fetch_target(fetch, battlefield, library, spells_in_hand, hand, turn):
+    """Pick the fetch's target context-aware:
+      - If we want to cast a spell this turn that needs a color we don't
+        have untapped, fetch a SHOCK that supplies it (even at 2 life).
+      - Else, fetch a surveil dual (no damage + surveil 1).
+      - Else, fetch a shock for color-fixing (no spell to cast right now,
+        but we'll use the mana later).
+      - Else, fetch a basic.
+    """
+    candidates = FETCH_TARGETS_FOR_PICK.get(fetch, [])
+    candidates_in_lib = [c for c in candidates if c in library]
+    if not candidates_in_lib:
+        return None
+
+    # Determine: do we need an untapped color this turn?
+    avail_now = [CARDS[l]["produces"] for l in battlefield if not CARDS[l]["tapped"]]
+    needed_color_for_cast = None
+    for spell in spells_in_hand:
+        cost = COST_MAP[spell]
+        if can_pay_cost(avail_now, cost):
+            continue  # already castable
+        # Find a missing color from the cost
+        for color, n in cost.items():
+            if color == "G":
+                continue
+            have_n = sum(1 for s in avail_now if color in s)
+            if have_n < n:
+                # Need this color from the new land (if it can supply)
+                # Plus any generic mana the spell needs
+                total_needed = sum(cost.values())
+                if len(avail_now) + 1 >= total_needed:
+                    needed_color_for_cast = color
+                    break
+        if needed_color_for_cast:
+            break
+
+    # Priority A: shock that supplies needed color (untapped)
+    if needed_color_for_cast:
+        for cand in candidates_in_lib:
+            if cand in SHOCK_LANDS_SET and needed_color_for_cast in CARDS[cand]["produces"]:
+                return cand
+
+    # Priority B: surveil dual that adds a new color (no damage)
+    have_colors = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
+    for cand in candidates_in_lib:
+        if cand in SURVEIL_DUAL_LANDS_SET:
+            new = set(CARDS[cand]["produces"]) - have_colors
+            if new:
+                return cand
+
+    # Priority C: shock that adds a new color
+    for cand in candidates_in_lib:
+        if cand in SHOCK_LANDS_SET:
+            new = set(CARDS[cand]["produces"]) - have_colors
+            if new:
+                return cand
+
+    # Priority D: any surveil dual (color overlap fine — surveil + no damage)
+    for cand in candidates_in_lib:
+        if cand in SURVEIL_DUAL_LANDS_SET:
+            return cand
+
+    # Priority E: any shock
+    for cand in candidates_in_lib:
+        if cand in SHOCK_LANDS_SET:
+            return cand
+
+    # Priority F: basic
+    return candidates_in_lib[0]
+
+
+SHOCK_LANDS_SET = {"Sacred Foundry", "Hallowed Fountain", "Steam Vents",
+                   "Stomping Ground", "Breeding Pool", "Watery Grave",
+                   "Blood Crypt", "Godless Shrine", "Overgrown Tomb",
+                   "Temple Garden"}
+SURVEIL_DUAL_LANDS_SET = {"Meticulous Archive", "Elegant Parlor", "Thundering Falls"}
+
+# Module-level FETCH_TARGETS for use by pick_land's fetch resolution.
+# Mirrors the in-loop FETCH_TARGETS used at land-play time. Ordered so the
+# resolver can iterate but the actual choice is made by _best_fetch_target.
+FETCH_TARGETS_FOR_PICK = {
+    "Scalding Tarn":      ["Steam Vents", "Hallowed Fountain", "Sacred Foundry",
+                           "Meticulous Archive", "Thundering Falls", "Elegant Parlor",
+                           "Island", "Mountain"],
+    "Arid Mesa":          ["Sacred Foundry", "Hallowed Fountain", "Steam Vents",
+                           "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                           "Mountain", "Plains"],
+    "Flooded Strand":     ["Hallowed Fountain", "Sacred Foundry", "Steam Vents",
+                           "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                           "Plains", "Island"],
+    "Misty Rainforest":   ["Hallowed Fountain", "Steam Vents", "Meticulous Archive",
+                           "Thundering Falls", "Island"],
+    "Polluted Delta":     ["Hallowed Fountain", "Steam Vents", "Meticulous Archive",
+                           "Thundering Falls", "Island"],
+    "Marsh Flats":        ["Sacred Foundry", "Hallowed Fountain", "Meticulous Archive",
+                           "Elegant Parlor", "Plains"],
+    "Wooded Foothills":   ["Sacred Foundry", "Steam Vents", "Elegant Parlor",
+                           "Thundering Falls", "Mountain"],
+    "Bloodstained Mire":  ["Sacred Foundry", "Steam Vents", "Elegant Parlor",
+                           "Thundering Falls", "Mountain"],
+    "Windswept Heath":    ["Sacred Foundry", "Hallowed Fountain", "Meticulous Archive",
+                           "Elegant Parlor", "Plains"],
+}
 
 def simulate(deck, trials=15000, on_play=True, max_turn=12):
     cond = defaultdict(lambda: [0, 0])  # key -> [had_precondition, could_cast]
@@ -207,8 +375,10 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
             if not (on_play and turn == 1) and library:
                 hand.append(library.pop(0))
 
-            # 2. Land drop
-            land = pick_land(hand, battlefield, turn)
+            # 2. Land drop (context-aware: looks at hand to pick land that
+            # enables the highest-priority cast this turn)
+            cast_pri_now = CAST_PRIORITIES_BY_TURN.get(turn, [])
+            land = pick_land(hand, battlefield, turn, hand_cast_priorities=cast_pri_now, library=library)
             if land:
                 hand.remove(land)
                 # Fetchlands: crack immediately. Fetch goes to yard, replaced by best dual.
@@ -235,28 +405,18 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
                 }
                 if land in FETCH_TARGETS:
                     graveyard.append(land)  # fetchland goes to yard
-                    # Pick the best target — must actually exist in library!
-                    have = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
-                    best = None
-                    # First pass: find a shock in library that adds a new color
-                    for cand in FETCH_TARGETS[land]:
-                        if cand not in library:
-                            continue
-                        produces = CARDS[cand]["produces"]
-                        new = produces - have
-                        if new:
-                            best = cand
-                            break
-                    # Second pass: find any valid land in library (any new color or not)
-                    if best is None:
-                        for cand in FETCH_TARGETS[land]:
-                            if cand in library:
-                                best = cand
-                                break
+                    # Context-aware target choice (per user feedback —
+                    # "the optionality there is important"). _best_fetch_target
+                    # decides:
+                    #   - shock (untapped, -2 life) if needed for a cast this turn
+                    #   - surveil dual (no damage + surveil) if no immediate cast
+                    #   - shock for color-fixing if no surveil dual reachable
+                    #   - basic as last resort
+                    spells_in_hand = [s for s in cast_pri_now if s in hand and s in COST_MAP]
+                    best = _best_fetch_target(land, battlefield, library, spells_in_hand, hand, turn)
                     if best is not None:
-                        library.remove(best)  # actually remove from library — fetches THIN the deck
+                        library.remove(best)
                         battlefield.append(best)
-                    # else: no valid target in library — fetch fizzles, fetch goes to yard for nothing
                 else:
                     battlefield.append(land)
 
