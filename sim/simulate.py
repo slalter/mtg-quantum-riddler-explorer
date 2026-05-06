@@ -75,7 +75,19 @@ CARDS = {
     "Windswept Heath":     L({"W","R"}),  # W/G; reaches SF, HF
     "Demolition Field":    L({"C"}),
     "Field of Ruin":       L({"C"}),
-    "Sunken Citadel":      L({"C"}, tapped=True),
+    # Sunken Citadel (Lost Caverns of Ixalan): ETBs tapped, AS IT ENTERS choose
+    # a color. {T}: Add 1 of chosen color. {T}: Add 2 of chosen color usable
+    # only on land abilities. We model it as multi-color {W,U,R} at ETB (the
+    # player picks the color most needed). This over-credits slightly because
+    # in real play one SC is locked to one color forever; with 2-3 SC in the
+    # deck the player can choose different colors per copy. For our WUR deck
+    # the optimal mix is W/R/U one each.
+    "Sunken Citadel":      L({"W", "U", "R"}, tapped=True),
+    # Cori Mountain Monastery: ETBs tapped UNLESS you control a Plains or
+    # Island. Most of our deck has W or U sources by T2, so we model it as
+    # ETB-tapped only if no W/U available — captured below in pick_land.
+    # Default produces is {R} untapped; the conditional check happens at play
+    # time. Approximation: treat as untapped (we usually have Plains/Island).
     "Cori Mountain Monastery": L({"R"}),
     "Arena of Glory":      L({"R"}),
     "Otawara, Soaring City": L({"U"}),
@@ -180,12 +192,13 @@ COST_MAP = {
 
 CAST_PRIORITIES_BY_TURN = {
     1: ["Erode", "Path to Exile", "Galvanic Discharge"],
-    # T2 expanded: Phantom (WW), Snapcaster (U+1) are real T2 plays. Including
-    # them in pick_land's optimization target keeps WW + UU castability up.
+    # T2: Phantom (WW) is a real T2 play. Snap is NOT — it needs a flashback
+    # target which doesn't exist by T2 in our deck (no T1 cast goes to yard
+    # for Snap to flashback at instant speed).
     2: ["White Orchid Phantom", "Cleansing Wildfire", "Price of Freedom", "Phelia",
-        "Snapcaster Mage", "Erode", "Path to Exile", "Galvanic Discharge"],
-    3: ["Phlage", "Cleansing Wildfire", "Price of Freedom", "White Orchid Phantom", "Phelia",
-        "Snapcaster Mage"],
+        "Erode", "Path to Exile", "Galvanic Discharge"],
+    3: ["Phlage", "Cleansing Wildfire", "Price of Freedom", "White Orchid Phantom",
+        "Phelia", "Snapcaster Mage"],
     4: ["Wrath of the Skies", "Wrath of God", "The Legend of Roku", "Cleansing Wildfire",
         "Price of Freedom", "White Orchid Phantom", "Snapcaster Mage"],
     5: ["Quantum Riddler", "Solitude", "Cleansing Wildfire", "Price of Freedom", "Phlage", "Erode"],
