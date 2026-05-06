@@ -81,15 +81,15 @@ CARDS = {
     "Otawara, Soaring City": L({"U"}),
     "Eiganjo, Seat of the Empire": L({"W"}),
     "Sokenzan, Crucible of Defiance": L({"R"}),
-    # MKM surveil duals (2024). ETB untapped if you control 2 or fewer
-    # OTHER lands. Tap for two colors. No life cost. Surveil 1 on ETB.
-    # Modeled below in pick_land/play_land logic via the "early_only_untapped"
-    # flag — they ETB tapped when played as 4th+ land.
-    "Meticulous Archive":          L({"W", "U"}),
-    "Elegant Parlor":              L({"R", "W"}),
-    "Thundering Falls":            L({"U", "R"}),
-    # Fast lands (Modern-legal cycle). ETB untapped with ≤2 other lands.
-    # No life cost, no surveil. Same ETB rule as surveil duals.
+    # MKM surveil duals (2024). ALWAYS ETB tapped (verified via Scryfall —
+    # there is NO "fewer than 2 other lands" exception). Tap for two colors.
+    # Surveil 1 on ETB. Basic-typed (fetchable). No life cost.
+    "Meticulous Archive":          L({"W", "U"}, tapped=True),
+    "Elegant Parlor":              L({"R", "W"}, tapped=True),
+    "Thundering Falls":            L({"U", "R"}, tapped=True),
+    # Fast lands (Spirebluff Canal cycle). ETB tapped UNLESS you control ≤2
+    # other lands — i.e. untapped on T1-T3, tapped from T4+. Not basic-typed
+    # (not fetchable). No life cost.
     "Seachrome Coast":             L({"W", "U"}),
     "Spirebluff Canal":            L({"U", "R"}),
     "Inspiring Vantage":           L({"R", "W"}),

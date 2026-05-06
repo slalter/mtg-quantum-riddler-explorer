@@ -369,14 +369,25 @@ SHOCK_LANDS = {"Sacred Foundry", "Hallowed Fountain", "Steam Vents",
                "Stomping Ground", "Breeding Pool", "Watery Grave",
                "Blood Crypt", "Godless Shrine", "Overgrown Tomb",
                "Temple Garden"}
-# Lands that ETB tapped if you control 3+ other lands (i.e., when played as
-# 4th-or-later land). Otherwise ETB untapped. Includes MKM surveil duals
-# and the modern fast-land cycle. No life cost in either case.
-ETB_TAPPED_LATE_LANDS = {
-    "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
-    "Seachrome Coast", "Spirebluff Canal", "Inspiring Vantage",
-}
+# Fast lands (Spirebluff Canal cycle): ETB tapped when played as 4th+ land.
+# Untapped early. Not basic-typed.
+FAST_LANDS = {"Seachrome Coast", "Spirebluff Canal", "Inspiring Vantage"}
+# MKM surveil duals: ALWAYS ETB tapped, surveil 1 on ETB. Basic-typed (fetchable).
 SURVEIL_DUAL_LANDS = {"Meticulous Archive", "Elegant Parlor", "Thundering Falls"}
+# Combined: lands that ETB tapped under some condition AND have no life cost.
+ETB_MAYBE_TAPPED_LANDS = SURVEIL_DUAL_LANDS | FAST_LANDS
+
+# Probability a fresh shock is played UNTAPPED (paying 2 life) by turn —
+# captures the user's insight that shock damage scales with whether you
+# need the colors immediately. Early game = need it untapped (high P).
+# Late game = often you can ETB tapped (low P).
+P_SHOCK_UNTAPPED_BY_TURN = {
+    1: 1.00, 2: 0.95, 3: 0.90,
+    4: 0.70, 5: 0.50, 6: 0.30,
+}
+# Mid-turn fetched shocks: you cracked the fetch DURING the turn, almost
+# always because you need the color now → almost always untapped.
+P_FETCHED_SHOCK_UNTAPPED = 0.92
 
 
 def color_reliability_score(deck_def, n=4000, return_parts=False):
@@ -448,10 +459,20 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
     p_phlage_esc_t5 = 0
     p_qr_t5 = 0
     total_damage_t6 = 0
+    total_surveils = 0  # for surveil bonus
+    total_natural_tap_lands_T3 = 0  # tracks "drew a surveil dual T1-T3" tempo penalty
 
     has_phlage = deck_def.get("Phlage", 0) > 0
     has_qr = deck_def.get("Quantum Riddler", 0) > 0
     has_wos = deck_def.get("Wrath of the Skies", 0) > 0
+
+    def _is_etb_tapped(card, n_other_lands):
+        """Resolve the actual ETB-tapped status given the current turn state."""
+        if card in SURVEIL_DUAL_LANDS:
+            return True  # always tapped
+        if card in FAST_LANDS:
+            return n_other_lands >= 3  # tapped only as 4th+ land
+        return CARDS[card].get("tapped", False)
 
     for _ in range(n):
         random.shuffle(deck_list)
@@ -460,6 +481,8 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
         # Each in_play element: (card_name, ETB_was_tapped_bool)
         in_play = []
         damage = 0
+        surveils_this_game = 0
+        natural_tap_in_early_game = 0  # tap-lands played T1-T3 = tempo loss
 
         for turn in range(1, 7):
             if turn > 1 and library:
@@ -467,14 +490,11 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
 
             land_in_hand = [c for c in hand if CARDS[c]["land"]]
             if land_in_hand:
-                have = colors_in_play([n for n, _ in in_play])
-                # Pick best land: maximize new-color gain, prefer untapped.
+                have = colors_in_play([nm for nm, _ in in_play])
+                n_other = len(in_play)
                 def play_land_score(card):
-                    # Will it be ETB tapped?
-                    will_etb_tapped = (
-                        (card in ETB_TAPPED_LATE_LANDS and len(in_play) >= 3)
-                        or CARDS[card].get("tapped", False)
-                    )
+                    # Prefer: more new colors > untapped > basic
+                    will_etb_tapped = _is_etb_tapped(card, n_other)
                     if card in FETCH_TARGETS:
                         best_gain = -1
                         for cand in FETCH_TARGETS[card]:
@@ -483,16 +503,17 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
                                 g = len(cand_colors - have)
                                 if g > best_gain:
                                     best_gain = g
-                        return (-best_gain, will_etb_tapped, 0)
+                        return (-best_gain, False, 0)  # fetches always crackable, treat as untapped
                     return (-len(land_colors_now(card) - have), will_etb_tapped, 0)
                 land_in_hand.sort(key=play_land_score)
                 play = land_in_hand[0]
                 hand.remove(play)
 
                 if play in FETCH_TARGETS:
-                    # Cracking the fetch costs 1 life
-                    damage += 1
-                    have = colors_in_play([n for n, _ in in_play])
+                    damage += 1  # crack cost
+                    have = colors_in_play([nm for nm, _ in in_play])
+                    # Find best target: prefer surveil dual (free + surveil),
+                    # then shock that adds new color, then any shock, then basic.
                     fetched = None
                     for cand in FETCH_TARGETS[play]:
                         if cand in library and (land_colors_now(cand) - have):
@@ -505,34 +526,53 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
                                 break
                     if fetched is not None:
                         library.remove(fetched)
-                        # Shocks always ETB untapped from a fetch (you pay 2 life).
                         if fetched in SHOCK_LANDS:
-                            damage += 2
-                            in_play.append((fetched, False))
-                        elif fetched in ETB_TAPPED_LATE_LANDS:
-                            tapped_now = len(in_play) >= 3
-                            in_play.append((fetched, tapped_now))
+                            # Mid-turn fetched shock: almost always untapped
+                            # because you needed the color now.
+                            if random.random() < P_FETCHED_SHOCK_UNTAPPED:
+                                damage += 2
+                                in_play.append((fetched, False))
+                            else:
+                                in_play.append((fetched, True))
+                        elif fetched in SURVEIL_DUAL_LANDS:
+                            surveils_this_game += 1
+                            in_play.append((fetched, True))  # always tapped
+                        elif fetched in FAST_LANDS:
+                            tapped = (len(in_play) >= 3)
+                            in_play.append((fetched, tapped))
                         else:
                             in_play.append((fetched, False))
                 else:
-                    # Hardcast: shock pays 2 life if you want it untapped.
                     if play in SHOCK_LANDS:
-                        damage += 2
-                        in_play.append((play, False))
-                    elif play in ETB_TAPPED_LATE_LANDS:
-                        # ETB tapped if 3+ other lands ALREADY in play (not counting this one)
-                        tapped_now = len(in_play) >= 3
-                        in_play.append((play, tapped_now))
+                        # Hardcast shock: turn-conditional damage. Early game
+                        # you NEED untapped (high P); late game you can ETB
+                        # tapped (low P).
+                        p_untapped = P_SHOCK_UNTAPPED_BY_TURN.get(turn, 0.20)
+                        if random.random() < p_untapped:
+                            damage += 2
+                            in_play.append((play, False))
+                        else:
+                            in_play.append((play, True))
+                    elif play in SURVEIL_DUAL_LANDS:
+                        surveils_this_game += 1
+                        in_play.append((play, True))
+                        if turn <= 3:
+                            natural_tap_in_early_game += 1
+                    elif play in FAST_LANDS:
+                        tapped = (len(in_play) >= 3)
+                        in_play.append((play, tapped))
+                        if tapped and turn <= 3:
+                            natural_tap_in_early_game += 1
                     elif CARDS[play].get("tapped", False):
                         in_play.append((play, True))
+                        if turn <= 3:
+                            natural_tap_in_early_game += 1
                     else:
                         in_play.append((play, False))
 
-            # Untap step at end of turn: lands that ETB tapped become available next turn.
+            # Untap step at end of turn
             in_play = [(name, False) for name, _ in in_play]
 
-            available = [name for name, was_tapped in in_play]  # all available next turn
-            # For THIS turn's color check, exclude lands that just ETB tapped
             this_turn_available = [name for name, t in in_play if not t]
             r = color_count(this_turn_available, "R")
             w = color_count(this_turn_available, "W")
@@ -546,6 +586,7 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
                     p_wur_t3 += 1
                 if r >= 1 and w >= 1 and n_in_play >= 3:
                     p_phlage_t3 += 1
+                total_natural_tap_lands_T3 += natural_tap_in_early_game
             if turn == 4:
                 n_t4 += 1
                 if w >= 2 and n_in_play >= 4:
@@ -559,6 +600,7 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
             if turn == 6:
                 n_t6 += 1
                 total_damage_t6 += damage
+                total_surveils += surveils_this_game
 
     components = [(p_wur_t3 / max(n_t3, 1)) * 100]
     if has_phlage:
@@ -569,14 +611,27 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
     if has_wos:
         components.append((p_wos_t4 / max(n_t4, 1)) * 100)
 
-    # Life safety: avg damage taken from manabase by T6.
-    # Each life over 6 = -5 to safety score (so 6 dmg = 100, 16 dmg = 50, 26 dmg = 0).
-    # Modern decks reasonably take ~6-10 manabase damage; >10 starts mattering.
+    # Life safety: probabilistic damage. Modern decks taking <6 dmg are great.
     avg_damage = total_damage_t6 / max(n_t6, 1)
-    life_safety = max(0.0, min(100.0, 100 - max(0, avg_damage - 6) * 5))
+    life_safety = max(0.0, min(100.0, 100 - max(0, avg_damage - 4) * 6))
     components.append(life_safety)
 
+    # Surveil-quality bonus: average surveils-per-game scaled to 0-100.
+    # Each surveil = card selection ≈ +0.3 cards drawn equiv. ~3 surveils/game = great.
+    avg_surveils = total_surveils / max(n_t6, 1)
+    surveil_score = min(avg_surveils * 35, 100)  # 0 surveils = 0, ~3 = 100
+    components.append(surveil_score)
+
+    # Tempo penalty: natural-drawn tap-lands T1-T3 = lost mana that turn.
+    # Already implicitly affects WUR/Phlage T3 metrics, but small explicit
+    # weight smooths the landscape so the optimizer can see tap-land drag.
+    avg_early_tap = total_natural_tap_lands_T3 / max(n_t3, 1)
+    tempo_score = max(0.0, 100 - avg_early_tap * 30)  # 0 early-taps = 100, 1 = 70
+
     color_score = sum(components) / len(components)
+    # Blend tempo score in at 15% weight relative to the average above
+    color_score = 0.85 * color_score + 0.15 * tempo_score
+
     if return_parts:
         return color_score, {
             "p_wur_t3": (p_wur_t3 / max(n_t3, 1)) * 100,
@@ -586,6 +641,10 @@ def color_reliability_score(deck_def, n=4000, return_parts=False):
             "p_wos_t4": (p_wos_t4 / max(n_t4, 1)) * 100 if has_wos else None,
             "avg_damage_t6": avg_damage,
             "life_safety": life_safety,
+            "avg_surveils": avg_surveils,
+            "surveil_score": surveil_score,
+            "avg_early_tap_lands": avg_early_tap,
+            "tempo_score": tempo_score,
         }
     return color_score
 
