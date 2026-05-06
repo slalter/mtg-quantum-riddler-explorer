@@ -1,0 +1,38 @@
+{
+  "phelia": {
+    "keep_open_2to4_lands": 0.77775,
+    "t1_white_source": 0.53285,
+    "engine_t1_t2": 0.7632,
+    "see_qr_by_t7": 0.6376,
+    "t3_phlage": 0.25155,
+    "t2_warp_qr": 0.26,
+    "qr_flood_2plus": 0.20605,
+    "t3_phlage_haste": 0.05305,
+    "t5_hardcast_qr": 0.1406,
+    "t2_phantom_castable": 0.03175
+  },
+  "pure_engine": {
+    "keep_open_2to4_lands": 0.7809,
+    "t1_white_source": 0.6464,
+    "engine_t1_t2": 0.71005,
+    "t3_phlage": 0.2552,
+    "t2_warp_qr": 0.1814,
+    "see_qr_by_t7": 0.63585,
+    "qr_flood_2plus": 0.1973,
+    "t2_phantom_castable": 0.047,
+    "t5_hardcast_qr": 0.0674,
+    "t3_phlage_haste": 0.09075
+  },
+  "roku": {
+    "keep_open_2to4_lands": 0.77395,
+    "t1_white_source": 0.6389,
+    "engine_t1_t2": 0.728,
+    "t2_warp_qr": 0.14805,
+    "see_qr_by_t7": 0.63965,
+    "qr_flood_2plus": 0.20095,
+    "t3_phlage": 0.2121,
+    "t3_phlage_haste": 0.07365,
+    "t5_hardcast_qr": 0.0454,
+    "t2_phantom_castable": 0.03695
+  }
+}

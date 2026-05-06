@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Modern Boros LD → Quantum Riddler — Deck Explorer</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="badge">MODERN</span>
+      <h1>WR Basic-Depletion → <em>Quantum Riddler</em></h1>
+    </div>
+    <p class="tagline">The engine: 4× <strong>Erode</strong> + 4× <strong>Path to Exile</strong> + 4× <strong>White Orchid Phantom</strong> + 4× <strong>Cleansing Wildfire</strong> + 4× <strong>Price of Freedom</strong> = 20 forced basic-tutors. Drain their basic-land library, then their non-basics fall to Demolition Field / Field of Ruin / Phantom for free. Three Quantum Riddler upgrade paths.</p>
+  </header>
+
+  <nav class="tabs" id="variant-tabs"></nav>
+
+  <main class="grid">
+    <aside class="panel deck-panel">
+      <div class="panel-head">
+        <h2 id="deck-title">—</h2>
+        <p id="deck-subtitle" class="muted"></p>
+        <div class="meta-row">
+          <span id="deck-colors" class="chip"></span>
+          <span id="deck-arch" class="chip"></span>
+          <span id="deck-count" class="chip"></span>
+        </div>
+      </div>
+
+      <h3>Mainboard <span class="muted" id="main-count"></span></h3>
+      <div id="mainboard-list" class="card-list"></div>
+
+      <h3>Sideboard <span class="muted" id="side-count"></span></h3>
+      <div id="sideboard-list" class="card-list"></div>
+    </aside>
+
+    <section class="panel graph-panel">
+      <div class="panel-head">
+        <h2>Synergy Graph</h2>
+        <p class="muted">Click a card node to inspect. Edges = tested synergies. Toggle clusters with the legend.</p>
+      </div>
+      <div id="legend" class="legend"></div>
+      <div id="cy"></div>
+      <div id="card-detail" class="card-detail" hidden></div>
+    </section>
+
+    <aside class="panel info-panel">
+      <div class="panel-head">
+        <h2>Game Plan</h2>
+      </div>
+      <p id="pitch" class="pitch"></p>
+
+      <h3>Lines of play</h3>
+      <ol id="gameplan"></ol>
+
+      <h3>Key combo</h3>
+      <div id="combo" class="combo"></div>
+
+      <h3>Statistical reliability <span class="muted" style="text-transform:none;letter-spacing:normal;font-size:10px">(Monte Carlo, n=20k)</span></h3>
+      <div id="stats" class="stats"></div>
+
+      <h3>Mana curve</h3>
+      <div id="curve" class="curve"></div>
+    </aside>
+  </main>
+
+  <footer class="foot muted">
+    Built as a Cytoscape.js + dagre interactive prototype. All card text summarized; not affiliated with Wizards of the Coast.
+  </footer>
+
+  <script src="js/cytoscape.min.js"></script>
+  <script src="js/dagre.min.js"></script>
+  <script src="js/cytoscape-dagre.js"></script>
+  <script src="js/cards.js?v=17"></script>
+  <script src="js/decks.js?v=17"></script>
+  <script src="js/stats.js?v=17"></script>
+  <script src="js/app.js?v=17"></script>
+</body>
+</html>
