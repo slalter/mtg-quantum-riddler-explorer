@@ -365,20 +365,255 @@ def stuff_to_do_score(sim_result):
     flood_score = 100 - flood_pct_avg
     return (spell_score + flood_score) / 2
 
-def composite_score(deck_def, sim_result, weights=(0.45, 0.25, 0.15, 0.15)):
-    """45% power + 25% castability + 15% mana efficiency + 15% stuff-to-do."""
+SHOCK_LANDS = {"Sacred Foundry", "Hallowed Fountain", "Steam Vents",
+               "Stomping Ground", "Breeding Pool", "Watery Grave",
+               "Blood Crypt", "Godless Shrine", "Overgrown Tomb",
+               "Temple Garden"}
+# Lands that ETB tapped if you control 3+ other lands (i.e., when played as
+# 4th-or-later land). Otherwise ETB untapped. Includes MKM surveil duals
+# and the modern fast-land cycle. No life cost in either case.
+ETB_TAPPED_LATE_LANDS = {
+    "Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+    "Seachrome Coast", "Spirebluff Canal", "Inspiring Vantage",
+}
+SURVEIL_DUAL_LANDS = {"Meticulous Archive", "Elegant Parlor", "Thundering Falls"}
+
+
+def color_reliability_score(deck_def, n=4000, return_parts=False):
+    """Direct measurement of manabase quality + life safety.
+
+    Simulates land-draw + fetch-cracking against THIS deck's specific
+    shock pool. A fetch can only find what's in library at fetch time;
+    once shocks are exhausted the fetch falls back to a basic.
+
+    Tracks life loss:
+      - Each fetch crack: -1 life
+      - Each shock entering untapped: -2 life
+    Surveil duals (Meticulous Archive et al.) and fast lands (Seachrome
+    Coast et al.) ETB tapped when played as the 4th-or-later land — they
+    cost 0 life but can be tempo-negative late.
+
+    Aggregates probabilities of hitting key color requirements:
+      - WUR by T3 (universal)
+      - RW + 1 by T3 (Phlage hardcast — only if Phlage > 0)
+      - RRWW by T5 (Phlage escape — only if Phlage > 0)
+      - UU + 3 by T5 (QR hardcast — only if QR > 0)
+      - WW + 2 by T4 (Wrath of the Skies — only if WoS > 0)
+    Plus a life_safety component: avg life remaining after T6 damage,
+    rewarding manabases that don't burn the player out.
+
+    Returns 0-100.
+    """
+    import random
+    from simulate import build_deck, CARDS
+
+    # Reuse the simulator's fetch-target list — it knows which shocks
+    # each fetch reaches via type-line. Surveil duals listed first
+    # (preferred over shocks: no life cost + surveil 1).
+    FETCH_TARGETS = {
+        "Scalding Tarn":     ["Meticulous Archive", "Thundering Falls", "Elegant Parlor",
+                              "Steam Vents", "Hallowed Fountain", "Sacred Foundry", "Island", "Mountain"],
+        "Arid Mesa":         ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                              "Sacred Foundry", "Hallowed Fountain", "Steam Vents", "Mountain", "Plains"],
+        "Flooded Strand":    ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                              "Hallowed Fountain", "Sacred Foundry", "Steam Vents", "Plains", "Island"],
+        "Misty Rainforest":  ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
+        "Polluted Delta":    ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
+        "Marsh Flats":       ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
+        "Wooded Foothills":  ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
+        "Bloodstained Mire": ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
+        "Windswept Heath":   ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
+    }
+
+    def land_colors_now(card):
+        """Actual colors a played land currently produces (post-crack)."""
+        if card in CARDS and CARDS[card]["land"]:
+            return set(CARDS[card]["produces"]) - {"C"}
+        return set()
+
+    def colors_in_play(in_play):
+        out = set()
+        for l in in_play:
+            out |= land_colors_now(l)
+        return out
+
+    def color_count(in_play, color):
+        return sum(1 for l in in_play if color in land_colors_now(l))
+
+    deck_list = build_deck(deck_def)
+    n_t3 = n_t4 = n_t5 = n_t6 = 0
+    p_wur_t3 = 0
+    p_phlage_t3 = 0
+    p_wos_t4 = 0
+    p_phlage_esc_t5 = 0
+    p_qr_t5 = 0
+    total_damage_t6 = 0
+
+    has_phlage = deck_def.get("Phlage", 0) > 0
+    has_qr = deck_def.get("Quantum Riddler", 0) > 0
+    has_wos = deck_def.get("Wrath of the Skies", 0) > 0
+
+    for _ in range(n):
+        random.shuffle(deck_list)
+        hand = deck_list[:7]
+        library = deck_list[7:]
+        # Each in_play element: (card_name, ETB_was_tapped_bool)
+        in_play = []
+        damage = 0
+
+        for turn in range(1, 7):
+            if turn > 1 and library:
+                hand.append(library.pop(0))
+
+            land_in_hand = [c for c in hand if CARDS[c]["land"]]
+            if land_in_hand:
+                have = colors_in_play([n for n, _ in in_play])
+                # Pick best land: maximize new-color gain, prefer untapped.
+                def play_land_score(card):
+                    # Will it be ETB tapped?
+                    will_etb_tapped = (
+                        (card in ETB_TAPPED_LATE_LANDS and len(in_play) >= 3)
+                        or CARDS[card].get("tapped", False)
+                    )
+                    if card in FETCH_TARGETS:
+                        best_gain = -1
+                        for cand in FETCH_TARGETS[card]:
+                            if cand in library:
+                                cand_colors = land_colors_now(cand)
+                                g = len(cand_colors - have)
+                                if g > best_gain:
+                                    best_gain = g
+                        return (-best_gain, will_etb_tapped, 0)
+                    return (-len(land_colors_now(card) - have), will_etb_tapped, 0)
+                land_in_hand.sort(key=play_land_score)
+                play = land_in_hand[0]
+                hand.remove(play)
+
+                if play in FETCH_TARGETS:
+                    # Cracking the fetch costs 1 life
+                    damage += 1
+                    have = colors_in_play([n for n, _ in in_play])
+                    fetched = None
+                    for cand in FETCH_TARGETS[play]:
+                        if cand in library and (land_colors_now(cand) - have):
+                            fetched = cand
+                            break
+                    if fetched is None:
+                        for cand in FETCH_TARGETS[play]:
+                            if cand in library:
+                                fetched = cand
+                                break
+                    if fetched is not None:
+                        library.remove(fetched)
+                        # Shocks always ETB untapped from a fetch (you pay 2 life).
+                        if fetched in SHOCK_LANDS:
+                            damage += 2
+                            in_play.append((fetched, False))
+                        elif fetched in ETB_TAPPED_LATE_LANDS:
+                            tapped_now = len(in_play) >= 3
+                            in_play.append((fetched, tapped_now))
+                        else:
+                            in_play.append((fetched, False))
+                else:
+                    # Hardcast: shock pays 2 life if you want it untapped.
+                    if play in SHOCK_LANDS:
+                        damage += 2
+                        in_play.append((play, False))
+                    elif play in ETB_TAPPED_LATE_LANDS:
+                        # ETB tapped if 3+ other lands ALREADY in play (not counting this one)
+                        tapped_now = len(in_play) >= 3
+                        in_play.append((play, tapped_now))
+                    elif CARDS[play].get("tapped", False):
+                        in_play.append((play, True))
+                    else:
+                        in_play.append((play, False))
+
+            # Untap step at end of turn: lands that ETB tapped become available next turn.
+            in_play = [(name, False) for name, _ in in_play]
+
+            available = [name for name, was_tapped in in_play]  # all available next turn
+            # For THIS turn's color check, exclude lands that just ETB tapped
+            this_turn_available = [name for name, t in in_play if not t]
+            r = color_count(this_turn_available, "R")
+            w = color_count(this_turn_available, "W")
+            u = color_count(this_turn_available, "U")
+            colors = colors_in_play(this_turn_available)
+            n_in_play = len(this_turn_available)
+
+            if turn == 3:
+                n_t3 += 1
+                if {"W", "U", "R"}.issubset(colors):
+                    p_wur_t3 += 1
+                if r >= 1 and w >= 1 and n_in_play >= 3:
+                    p_phlage_t3 += 1
+            if turn == 4:
+                n_t4 += 1
+                if w >= 2 and n_in_play >= 4:
+                    p_wos_t4 += 1
+            if turn == 5:
+                n_t5 += 1
+                if r >= 2 and w >= 2 and n_in_play >= 4:
+                    p_phlage_esc_t5 += 1
+                if u >= 2 and n_in_play >= 5:
+                    p_qr_t5 += 1
+            if turn == 6:
+                n_t6 += 1
+                total_damage_t6 += damage
+
+    components = [(p_wur_t3 / max(n_t3, 1)) * 100]
+    if has_phlage:
+        components.append((p_phlage_t3 / max(n_t3, 1)) * 100)
+        components.append((p_phlage_esc_t5 / max(n_t5, 1)) * 100)
+    if has_qr:
+        components.append((p_qr_t5 / max(n_t5, 1)) * 100)
+    if has_wos:
+        components.append((p_wos_t4 / max(n_t4, 1)) * 100)
+
+    # Life safety: avg damage taken from manabase by T6.
+    # Each life over 6 = -5 to safety score (so 6 dmg = 100, 16 dmg = 50, 26 dmg = 0).
+    # Modern decks reasonably take ~6-10 manabase damage; >10 starts mattering.
+    avg_damage = total_damage_t6 / max(n_t6, 1)
+    life_safety = max(0.0, min(100.0, 100 - max(0, avg_damage - 6) * 5))
+    components.append(life_safety)
+
+    color_score = sum(components) / len(components)
+    if return_parts:
+        return color_score, {
+            "p_wur_t3": (p_wur_t3 / max(n_t3, 1)) * 100,
+            "p_phlage_t3": (p_phlage_t3 / max(n_t3, 1)) * 100 if has_phlage else None,
+            "p_phlage_esc_t5": (p_phlage_esc_t5 / max(n_t5, 1)) * 100 if has_phlage else None,
+            "p_qr_t5": (p_qr_t5 / max(n_t5, 1)) * 100 if has_qr else None,
+            "p_wos_t4": (p_wos_t4 / max(n_t4, 1)) * 100 if has_wos else None,
+            "avg_damage_t6": avg_damage,
+            "life_safety": life_safety,
+        }
+    return color_score
+
+
+def composite_score(deck_def, sim_result, weights=(0.40, 0.20, 0.10, 0.10, 0.20),
+                    color_n=4000):
+    """40% power + 20% castability + 10% mana efficiency + 10% stuff-to-do +
+    20% color reliability.
+
+    Color-reliability rewards manabases that reliably produce the required
+    colors on time. Without it the optimizer can't distinguish between a
+    redundant 4-4-1 shock split and a tighter 2-2-1 + off-color-fetch
+    split — both score similar on castability because the simulator's
+    pick_land already prioritizes color, masking the manabase difference."""
     power = effective_power(deck_def, sim_result)
     cast = castability_score(sim_result, deck_def)
     eff = mana_efficiency_score(sim_result)
     flood = stuff_to_do_score(sim_result)
+    color = color_reliability_score(deck_def, n=color_n)
     power_normalized = power * 10
     score = (weights[0] * power_normalized + weights[1] * cast +
-             weights[2] * eff + weights[3] * flood)
+             weights[2] * eff + weights[3] * flood + weights[4] * color)
     return score, {
         "power": power_normalized,
         "castability": cast,
         "mana_efficiency": eff,
         "stuff_to_do": flood,
+        "color_reliability": color,
         "depleted": sim_result["misc"].get("avg_basics_tutored_T6", 0) >= DEPLETION_THRESHOLD,
         "avg_basics_tutored_T6": sim_result["misc"].get("avg_basics_tutored_T6", 0),
         "avg_non_land_T7": sim_result["misc"].get("avg_non_land_in_hand_T7", 0),

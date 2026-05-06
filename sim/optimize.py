@@ -146,6 +146,56 @@ SWAP_CANDIDATES = [
     ("Mountain", "Bloodstained Mire"),
     ("Plains", "Windswept Heath"),
     ("Demolition Field", "Polluted Delta"),
+    # Shock-count tightening: cut redundant shocks (4-4-1 → 2-2-1) by
+    # swapping into off-color fetches that reach those shocks via type-line.
+    # Adding both directions so the climb can move freely.
+    ("Sacred Foundry", "Marsh Flats"),
+    ("Sacred Foundry", "Polluted Delta"),
+    ("Sacred Foundry", "Misty Rainforest"),
+    ("Hallowed Fountain", "Marsh Flats"),
+    ("Hallowed Fountain", "Misty Rainforest"),
+    ("Hallowed Fountain", "Polluted Delta"),
+    ("Sacred Foundry", "Steam Vents"),
+    ("Hallowed Fountain", "Steam Vents"),
+    ("Sacred Foundry", "Hallowed Fountain"),
+    ("Hallowed Fountain", "Sacred Foundry"),
+    # Reverse direction (re-add a shock if dropped too far)
+    ("Marsh Flats", "Sacred Foundry"),
+    ("Misty Rainforest", "Hallowed Fountain"),
+    ("Polluted Delta", "Hallowed Fountain"),
+    # Basic vs off-color fetch trade-off
+    ("Plains", "Misty Rainforest"),
+    ("Mountain", "Marsh Flats"),
+    ("Island", "Marsh Flats"),
+    ("Island", "Polluted Delta"),
+    # Surveil duals (MKM): basic-typed, ETB tapped only as 4th+ land,
+    # no life cost. Cut shocks for them to save life.
+    ("Sacred Foundry", "Meticulous Archive"),
+    ("Sacred Foundry", "Elegant Parlor"),
+    ("Hallowed Fountain", "Meticulous Archive"),
+    ("Hallowed Fountain", "Thundering Falls"),
+    ("Steam Vents", "Thundering Falls"),
+    ("Plains", "Meticulous Archive"),
+    ("Plains", "Elegant Parlor"),
+    ("Island", "Meticulous Archive"),
+    ("Island", "Thundering Falls"),
+    ("Mountain", "Elegant Parlor"),
+    ("Mountain", "Thundering Falls"),
+    # Reverse direction
+    ("Meticulous Archive", "Sacred Foundry"),
+    ("Elegant Parlor", "Sacred Foundry"),
+    ("Thundering Falls", "Steam Vents"),
+    # Fast lands (Spirebluff Canal cycle): not basic-typed (not fetchable
+    # by basic-fetches) but ETB untapped early with no life cost.
+    ("Sacred Foundry", "Inspiring Vantage"),
+    ("Hallowed Fountain", "Seachrome Coast"),
+    ("Steam Vents", "Spirebluff Canal"),
+    ("Plains", "Inspiring Vantage"),
+    ("Plains", "Seachrome Coast"),
+    ("Island", "Seachrome Coast"),
+    ("Island", "Spirebluff Canal"),
+    ("Mountain", "Inspiring Vantage"),
+    ("Mountain", "Spirebluff Canal"),
 ]
 
 def run_optimization(name, deck_def, max_swaps=None):

@@ -81,6 +81,18 @@ CARDS = {
     "Otawara, Soaring City": L({"U"}),
     "Eiganjo, Seat of the Empire": L({"W"}),
     "Sokenzan, Crucible of Defiance": L({"R"}),
+    # MKM surveil duals (2024). ETB untapped if you control 2 or fewer
+    # OTHER lands. Tap for two colors. No life cost. Surveil 1 on ETB.
+    # Modeled below in pick_land/play_land logic via the "early_only_untapped"
+    # flag — they ETB tapped when played as 4th+ land.
+    "Meticulous Archive":          L({"W", "U"}),
+    "Elegant Parlor":              L({"R", "W"}),
+    "Thundering Falls":            L({"U", "R"}),
+    # Fast lands (Modern-legal cycle). ETB untapped with ≤2 other lands.
+    # No life cost, no surveil. Same ETB rule as surveil duals.
+    "Seachrome Coast":             L({"W", "U"}),
+    "Spirebluff Canal":            L({"U", "R"}),
+    "Inspiring Vantage":           L({"R", "W"}),
     "Flashback":           S(1, {"R":1}),
     "Snapcaster Mage":     S(2, {"U":1}, creature=True),
     "Counterspell":        S(2, {"U":2}),
@@ -180,18 +192,23 @@ def simulate(deck, trials=15000, on_play=True, max_turn=12):
             if land:
                 hand.remove(land)
                 # Fetchlands: crack immediately. Fetch goes to yard, replaced by best dual.
+                # Surveil duals listed BEFORE shocks: preferred fetch target
+                # (no life cost + surveil 1).
                 FETCH_TARGETS = {
-                    "Scalding Tarn":      ["Steam Vents", "Hallowed Fountain", "Sacred Foundry", "Island", "Mountain"],
-                    "Arid Mesa":          ["Sacred Foundry", "Hallowed Fountain", "Steam Vents", "Mountain", "Plains"],
-                    "Flooded Strand":     ["Hallowed Fountain", "Sacred Foundry", "Steam Vents", "Plains", "Island"],
+                    "Scalding Tarn":      ["Meticulous Archive", "Thundering Falls", "Elegant Parlor",
+                                           "Steam Vents", "Hallowed Fountain", "Sacred Foundry", "Island", "Mountain"],
+                    "Arid Mesa":          ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                                           "Sacred Foundry", "Hallowed Fountain", "Steam Vents", "Mountain", "Plains"],
+                    "Flooded Strand":     ["Meticulous Archive", "Elegant Parlor", "Thundering Falls",
+                                           "Hallowed Fountain", "Sacred Foundry", "Steam Vents", "Plains", "Island"],
                     # Off-color fetches: list ONLY shocks they can actually find via subtypes,
                     # then the 1 basic they reach. Lose flexibility vs in-color fetches.
-                    "Misty Rainforest":   ["Hallowed Fountain", "Steam Vents", "Island"],     # G/U fetch
-                    "Polluted Delta":     ["Hallowed Fountain", "Steam Vents", "Island"],     # U/B fetch
-                    "Marsh Flats":        ["Sacred Foundry", "Hallowed Fountain", "Plains"],   # W/B fetch
-                    "Wooded Foothills":   ["Sacred Foundry", "Steam Vents", "Mountain"],      # R/G fetch
-                    "Bloodstained Mire":  ["Sacred Foundry", "Steam Vents", "Mountain"],      # B/R fetch
-                    "Windswept Heath":    ["Sacred Foundry", "Hallowed Fountain", "Plains"],   # W/G fetch
+                    "Misty Rainforest":   ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
+                    "Polluted Delta":     ["Meticulous Archive", "Thundering Falls", "Hallowed Fountain", "Steam Vents", "Island"],
+                    "Marsh Flats":        ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
+                    "Wooded Foothills":   ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
+                    "Bloodstained Mire":  ["Elegant Parlor", "Thundering Falls", "Sacred Foundry", "Steam Vents", "Mountain"],
+                    "Windswept Heath":    ["Meticulous Archive", "Elegant Parlor", "Sacred Foundry", "Hallowed Fountain", "Plains"],
                 }
                 if land in FETCH_TARGETS:
                     graveyard.append(land)  # fetchland goes to yard
