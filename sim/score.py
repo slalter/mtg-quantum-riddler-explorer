@@ -39,11 +39,21 @@ CARD_POWER = {
 
 # Cards that count as good Ephemerate / Phelia attack-blink targets
 # Per-blink value of each target. Phlage is 0 (sacs on return).
+# Per user feedback: Phelia returns target at END STEP (instant-speed-only).
+# That changes which targets actually combo:
+#   - QR: warp → blink → permanent. Strong combo.
+#   - Phantom: blink → 2nd ETB land destruction. Good.
+#   - Solitude: only OK because Phelia can't blink an EVOKED Solitude (it's
+#     exiled by evoke replacement). Only hard-cast Solitude can be blinked.
+#     Most Solitudes are evoked → blink rarely triggers.
+#   - Snap: poor. Phelia exiles Snap on attack, returns end step. Snap
+#     flashbacks happen on YOUR main phase; the end-step return doesn't
+#     reset the flashback timer. Net: roughly a 2/1 body, no extra value.
 BLINK_TARGET_VALUE = {
-    "Quantum Riddler": 9,        # warp → permanent
+    "Quantum Riddler": 9,        # warp → blink → permanent
     "White Orchid Phantom": 7,   # repeat ETB land destruction (basic-tutor)
-    "Solitude": 9,               # repeat ETB exile-removal — INSANE per user feedback
-    "Snapcaster Mage": 4,
+    "Solitude": 4,               # was 9 — only hard-cast Solitudes blink (most are evoked)
+    "Snapcaster Mage": 1,        # was 4 — end-step return misses flashback window
     # explicitly excluded: Phlage (sacs on return), Phelia (legendary)
 }
 
