@@ -15,7 +15,12 @@ from collections import Counter
 # Per-card config: base power, DR curve (multipliers for copy 1..4), and conditional flags
 CARD_POWER = {
     "Quantum Riddler":      {"base": 9,   "dr": [1.0, 1.0, 1.0, 1.0],   "engine": False, "legendary": False},
-    "Phlage":               {"base": 9,   "dr": [1.0, 0.5, 0.2, 0.1],   "engine": False, "legendary": True},
+    # Phlage DR softened from [1.0, 0.5, 0.2, 0.1] to [1.0, 0.85, 0.55, 0.30] per
+    # user observation: Helix-mode (cast → trigger → self-sac to yard) doesn't
+    # care about the legendary rule. Each extra copy in hand is another T3
+    # Helix + escape-fuel, not a dead card. The old curve was over-counting
+    # the legendary penalty for a card whose dominant mode bypasses it.
+    "Phlage":               {"base": 9,   "dr": [1.0, 0.85, 0.55, 0.30], "engine": False, "legendary": True},
     "The Legend of Roku":   {"base": 8,   "dr": [1.0, 0.4, 0.1, 0.0],   "engine": False, "legendary": True},
     "Phelia":               {"base": 7,   "dr": [1.0, 0.4, 0.1, 0.0],   "engine": False, "legendary": True},
     "Solitude":             {"base": 8,   "dr": [1.0, 0.85, 0.65, 0.45],"engine": False, "legendary": False, "needs_white_density": True},

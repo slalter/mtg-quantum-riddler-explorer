@@ -6,33 +6,47 @@ This repo grew out of a single conversation between a human MTG player and an AI
 
 ## TL;DR — what's the recommendation?
 
-**Phlage-free SAFE build** — the locked overnight recommendation. Composite score 63.70 ± 0.25 (multi-seed verified).
+**HYBRID v20** — replaces the previous Phlage-free SAFE pick after two
+corrections from human feedback:
+
+1. **Phlage DR softened.** The old curve `[1.0, 0.5, 0.2, 0.1]` treated Phlage
+   as a generic legendary; in practice his Helix-mode (cast → trigger → self-sac
+   to yard) bypasses the legendary rule, so extra copies are still useful. New
+   curve: `[1.0, 0.85, 0.55, 0.30]`. See `sim/score.py`.
+2. **Manabase tightened.** Old 4-4-1 shock split was over-redundant; modern
+   WUR builds run 2-2-1 shocks plus off-color fetches (Marsh Flats, Misty
+   Rainforest) since fetches functionally reach all WUR colors via shock
+   typeline. New manabase has +2.4pp WUR-by-T3 and +3.2pp QR-hardcast-by-T5.
+
+Composite: 63.80 ± 0.25 (multi-seed verified, 5 seeds × 4000 trials).
 
 ```
 // Mainboard (60)
 4 White Orchid Phantom
 4 Quantum Riddler
 2 Phelia, Exuberant Shepherd
+2 Phlage, Titan of Fire's Fury
 2 Solitude
-3 Snapcaster Mage
+2 Snapcaster Mage
 4 Erode
 4 Path to Exile
 4 Cleansing Wildfire
 4 Price of Freedom
 2 Galvanic Discharge
-2 Wrath of the Skies
+1 Wrath of the Skies
 4 Arid Mesa
 4 Scalding Tarn
-4 Sacred Foundry
-4 Hallowed Fountain
+2 Marsh Flats
+1 Misty Rainforest
+2 Sacred Foundry
+2 Hallowed Fountain
 1 Steam Vents
 1 Arena of Glory
 1 Demolition Field
-1 Field of Ruin
-1 Misty Rainforest
+2 Field of Ruin
 2 Plains
 1 Mountain
-1 Island
+2 Island
 
 // Sideboard (15)
 3 Rest in Peace
