@@ -1,0 +1,52 @@
+{
+  "turn": 3,
+  "p0_life": 20,
+  "p1_life": 12,
+  "p0_battlefield": [
+    "Mountain",
+    "Field of Ruin",
+    "Island (tapped)"
+  ],
+  "p1_battlefield": [
+    "Hallowed Fountain",
+    "Hallowed Fountain",
+    "White Orchid Phantom (summoning sick)"
+  ],
+  "p0_yard": [
+    "Arid Mesa",
+    "Phlage, Titan of Fire's Fury",
+    "Sacred Foundry"
+  ],
+  "p1_yard": [
+    "Marsh Flats"
+  ],
+  "history": [
+    "=== Game start. Pilot A on the play. ===",
+    "Pilot A: opening hand drawn (7 cards)",
+    "Pilot B: opening hand drawn (7 cards)",
+    "Pilot A plays Arid Mesa",
+    "Pilot A: cracked Mesa for Sacred Foundry, took 3 dmg (now 17 life)",
+    "Pilot B draws for turn (now 8 cards)",
+    "[JUDGE] Pilot B claimed Marsh\u2192SV but Marsh fetches Plains/Swamp; SV illegal.",
+    "[JUDGE] Closest legal alt = Hallowed Fountain (W/U via Plains subtype). Both agents agree to apply that.",
+    "Pilot B plays Marsh Flats",
+    "Pilot B: cracked Marsh Flats for Hallowed Fountain, took 3 dmg (now 17 life)",
+    "Pilot A draws for turn (now 7 cards)",
+    "Pilot A plays Mountain",
+    "Pilot A passes turn (no other plays available \u2014 no creatures to remove, no spells on stack to counter, Phlage needs 1 more land)",
+    "Pilot B draws for turn (now 8 cards)",
+    "Pilot B plays Hallowed Fountain",
+    "Pilot B: Hallowed Fountain ETB untapped, took 2 dmg (now 15 life)",
+    "Pilot B holds priority \u2014 no spell castable this turn (can't pay 2 mana yet without untapping first)",
+    "Pilot A draws for turn (now 7 cards)",
+    "Pilot A plays Field of Ruin",
+    "Pilot A casts Phlage, Titan of Fire's Fury \u2192 ETB: 3 to opp, gain 3 life. Sacs to yard.",
+    "Phlage ETB: opp 12, Pilot A 20 life. Phlage to yard.",
+    "Pilot B draws for turn (now 8 cards)",
+    "Pilot B: casts White Orchid Phantom WW from 2 Hallowed Fountains",
+    "Pilot B casts White Orchid Phantom, enters battlefield",
+    "Pilot B destroys Pilot A's Sacred Foundry",
+    "Pilot A searches library for basic, puts Island into play tapped",
+    "Pilot A loses SF, finds a basic from library, plays it tapped"
+  ]
+}
