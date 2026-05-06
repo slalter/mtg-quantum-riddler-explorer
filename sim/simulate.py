@@ -130,6 +130,40 @@ def can_pay_cost(land_colors, cost):
 def color_count(land_colors, color):
     return sum(1 for s in land_colors if color in s)
 
+# --- Optionality scoring -----------------------------------------------------
+# Per user: "the more options we have, the better. So instead of just saying
+# what's the highest priority spell I can cast, say given my spells, does
+# this land enable me to cast them? Each additional option is worth
+# something too." This generalizes — a Phelia+Phlage hand benefits more
+# from a fetch that enables BOTH plays than from a fetch that enables just
+# Phlage alone, because optionality is what gives competitive edge.
+#
+# Implementation: option_value(castable_set, priority_list) returns
+#   priority_of_best_castable + EXTRA_OPTION_WEIGHT * sum(priority of others)
+# where priority(spell) = len(priority_list) - index. Best spell has the
+# largest priority value.
+EXTRA_OPTION_WEIGHT = 0.30  # each additional castable option worth 30% of its raw priority
+
+
+def option_value(castable_spells, priority_list):
+    """Score a set of castable spells. Higher = more options/better options."""
+    if not castable_spells:
+        return 0.0
+    L = len(priority_list)
+    # Map each castable spell to its priority value (higher = more important)
+    priorities = []
+    for s in castable_spells:
+        try:
+            idx = priority_list.index(s)
+        except ValueError:
+            idx = L  # not in priority list — small value
+        priorities.append(L - idx)
+    priorities.sort(reverse=True)
+    primary = priorities[0]
+    extras = sum(priorities[1:])
+    return primary + EXTRA_OPTION_WEIGHT * extras
+
+
 # Spell cost map shared between pick_land's lookahead and the actual cast loop.
 COST_MAP = {
     "Erode": {"W": 1}, "Path to Exile": {"W": 1}, "Galvanic Discharge": {"R": 1},
@@ -194,14 +228,14 @@ def pick_land(hand, battlefield, turn, hand_cast_priorities=None, library=None):
     early_game = turn <= 4
 
     def land_eval(land):
-        """Returns (priority_index_of_enabled_spell, is_tapped, -new_color_gain, not_is_basic).
+        """Returns (-option_value, is_tapped, -new_color_gain, not_is_basic).
 
-        Lower tuple = better. priority_index 0 = best spell enabled,
-        len(spells) = no spell enabled (fall back to fixing).
+        Lower tuple = better. Primary score is option_value: how many of
+        my desired spells can I cast if I play this land? Both the best
+        spell and the breadth of additional options count.
         """
         # Determine effective produces if this is a fetch (it'll resolve)
         if library is not None and land in FETCH_TARGETS_FOR_PICK:
-            # Find best fetchable target — iterate priority list
             target = _best_fetch_target(land, battlefield, library, spells_in_hand, hand, turn)
             effective_produces = CARDS[target]["produces"] if target else CARDS[land]["produces"]
             effective_tapped = CARDS[target]["tapped"] if target else False
@@ -217,94 +251,78 @@ def pick_land(hand, battlefield, turn, hand_cast_priorities=None, library=None):
             avail_after = [CARDS[l]["produces"] for l in battlefield
                            if not CARDS[l]["tapped"]] + [effective_produces]
 
-        # Find best enabled spell
-        best_idx = len(spells_in_hand)
-        for idx, spell in enumerate(spells_in_hand):
-            if can_pay_cost(avail_after, COST_MAP[spell]):
-                best_idx = idx
-                break
+        # Compute the SET of spells castable given this land choice.
+        # This is the optionality view: not just "best castable" but
+        # "which options open up?"
+        castable_now = [s for s in spells_in_hand if can_pay_cost(avail_after, COST_MAP[s])]
+        opt_val = option_value(castable_now, hand_cast_priorities)
 
-        is_tapped = effective_tapped
         new_color_gain = len(set(effective_produces) - have_colors - {"C"})
         is_basic = CARDS[land]["basic"]
 
+        # Negate option_value so that lower-tuple = better in sort.
         if early_game:
-            return (best_idx, is_tapped, -new_color_gain, not is_basic)
+            return (-opt_val, effective_tapped, -new_color_gain, not is_basic)
         else:
-            return (best_idx, -new_color_gain, is_tapped, not is_basic)
+            return (-opt_val, -new_color_gain, effective_tapped, not is_basic)
 
     lands.sort(key=land_eval)
     return lands[0]
 
 
 def _best_fetch_target(fetch, battlefield, library, spells_in_hand, hand, turn):
-    """Pick the fetch's target context-aware:
-      - If we want to cast a spell this turn that needs a color we don't
-        have untapped, fetch a SHOCK that supplies it (even at 2 life).
-      - Else, fetch a surveil dual (no damage + surveil 1).
-      - Else, fetch a shock for color-fixing (no spell to cast right now,
-        but we'll use the mana later).
-      - Else, fetch a basic.
+    """Pick fetch target by option_value: which target gives the best set of
+    spell options? Each candidate is scored by:
+      - option_value of spells castable given this target ETB'd
+      - tie-break: prefer no-damage targets (surveil dual > basic > shock)
+
+    The user's optionality principle applied: a surveil dual that enables
+    Phelia (and surveils 1 for future) competes against a shock that
+    enables Phelia + Phlage (more options now, costs life).
     """
     candidates = FETCH_TARGETS_FOR_PICK.get(fetch, [])
     candidates_in_lib = [c for c in candidates if c in library]
     if not candidates_in_lib:
         return None
 
-    # Determine: do we need an untapped color this turn?
-    avail_now = [CARDS[l]["produces"] for l in battlefield if not CARDS[l]["tapped"]]
-    needed_color_for_cast = None
-    for spell in spells_in_hand:
-        cost = COST_MAP[spell]
-        if can_pay_cost(avail_now, cost):
-            continue  # already castable
-        # Find a missing color from the cost
-        for color, n in cost.items():
-            if color == "G":
-                continue
-            have_n = sum(1 for s in avail_now if color in s)
-            if have_n < n:
-                # Need this color from the new land (if it can supply)
-                # Plus any generic mana the spell needs
-                total_needed = sum(cost.values())
-                if len(avail_now) + 1 >= total_needed:
-                    needed_color_for_cast = color
-                    break
-        if needed_color_for_cast:
-            break
+    priority_list = CAST_PRIORITIES_BY_TURN.get(turn, [])
 
-    # Priority A: shock that supplies needed color (untapped)
-    if needed_color_for_cast:
-        for cand in candidates_in_lib:
-            if cand in SHOCK_LANDS_SET and needed_color_for_cast in CARDS[cand]["produces"]:
-                return cand
+    def score_target(cand):
+        produces = CARDS[cand]["produces"]
+        is_tapped = CARDS[cand]["tapped"]
+        is_shock = cand in SHOCK_LANDS_SET
+        is_surveil = cand in SURVEIL_DUAL_LANDS_SET
+        is_basic = cand in {"Plains", "Mountain", "Island", "Swamp", "Forest"}
 
-    # Priority B: surveil dual that adds a new color (no damage)
-    have_colors = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
-    for cand in candidates_in_lib:
-        if cand in SURVEIL_DUAL_LANDS_SET:
-            new = set(CARDS[cand]["produces"]) - have_colors
-            if new:
-                return cand
+        # Compute avail_after fetching this target
+        if is_tapped:
+            avail_after = [CARDS[l]["produces"] for l in battlefield if not CARDS[l]["tapped"]]
+        else:
+            avail_after = [CARDS[l]["produces"] for l in battlefield if not CARDS[l]["tapped"]] + [produces]
 
-    # Priority C: shock that adds a new color
-    for cand in candidates_in_lib:
-        if cand in SHOCK_LANDS_SET:
-            new = set(CARDS[cand]["produces"]) - have_colors
-            if new:
-                return cand
+        # What spells can I cast NOW with this target?
+        castable_now = [s for s in spells_in_hand if can_pay_cost(avail_after, COST_MAP[s])]
+        opt_val_now = option_value(castable_now, priority_list)
 
-    # Priority D: any surveil dual (color overlap fine — surveil + no damage)
-    for cand in candidates_in_lib:
-        if cand in SURVEIL_DUAL_LANDS_SET:
-            return cand
+        # Bonus for surveil 1: yard fuel + card selection. Worth ~0.5
+        # in priority units (modest).
+        surveil_bonus = 0.5 if is_surveil else 0.0
 
-    # Priority E: any shock
-    for cand in candidates_in_lib:
-        if cand in SHOCK_LANDS_SET:
-            return cand
+        # Penalty for shock damage: -2 life ≈ small score penalty in
+        # the option-value framework. Roughly 0.4 per shock entering
+        # untapped (calibrated against typical option values of 1-5).
+        damage_penalty = 0.4 if (is_shock and not is_tapped) else 0.0
 
-    # Priority F: basic
+        # Color-fixing value for FUTURE turns: count new colors added
+        have_colors = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
+        new_colors = len(set(produces) - have_colors - {"C"})
+        future_color_bonus = 0.4 * new_colors  # each new color worth 0.4
+
+        total = opt_val_now + surveil_bonus + future_color_bonus - damage_penalty
+        # Lower tuple = better. Primary: -total. Tie-break by category.
+        return (-total, is_shock and not is_tapped, not is_surveil, not is_basic)
+
+    candidates_in_lib.sort(key=score_target)
     return candidates_in_lib[0]
 
 
