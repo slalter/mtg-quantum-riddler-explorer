@@ -227,40 +227,61 @@ def pick_land(hand, battlefield, turn, hand_cast_priorities=None, library=None):
     have_colors = set().union(*[CARDS[l]["produces"] for l in battlefield]) if battlefield else set()
     early_game = turn <= 4
 
-    def land_eval(land):
-        """Returns (-option_value, is_tapped, -new_color_gain, not_is_basic).
-
-        Lower tuple = better. Primary score is option_value: how many of
-        my desired spells can I cast if I play this land? Both the best
-        spell and the breadth of additional options count.
-        """
-        # Determine effective produces if this is a fetch (it'll resolve)
-        if library is not None and land in FETCH_TARGETS_FOR_PICK:
-            target = _best_fetch_target(land, battlefield, library, spells_in_hand, hand, turn)
-            effective_produces = CARDS[target]["produces"] if target else CARDS[land]["produces"]
-            effective_tapped = CARDS[target]["tapped"] if target else False
-        else:
-            effective_produces = CARDS[land]["produces"]
-            effective_tapped = CARDS[land]["tapped"]
-
-        # If this land would be tapped, it doesn't add to avail this turn.
-        if effective_tapped:
+    def _score_target_outcome(target):
+        """Score a single fetch target / land outcome by option_value of the
+        spells it enables PLUS small bonuses for surveil + future-color."""
+        produces = CARDS[target]["produces"]
+        is_tapped = CARDS[target]["tapped"]
+        is_shock = target in SHOCK_LANDS_SET
+        is_surveil = target in SURVEIL_DUAL_LANDS_SET
+        if is_tapped:
             avail_after = [CARDS[l]["produces"] for l in battlefield
                            if not CARDS[l]["tapped"]]
         else:
             avail_after = [CARDS[l]["produces"] for l in battlefield
-                           if not CARDS[l]["tapped"]] + [effective_produces]
-
-        # Compute the SET of spells castable given this land choice.
-        # This is the optionality view: not just "best castable" but
-        # "which options open up?"
+                           if not CARDS[l]["tapped"]] + [produces]
         castable_now = [s for s in spells_in_hand if can_pay_cost(avail_after, COST_MAP[s])]
-        opt_val = option_value(castable_now, hand_cast_priorities)
+        opt_now = option_value(castable_now, hand_cast_priorities)
+        new_colors = len(set(produces) - have_colors - {"C"})
+        bonus = (0.5 if is_surveil else 0.0) + 0.4 * new_colors
+        damage_penalty = 0.4 if (is_shock and not is_tapped) else 0.0
+        return opt_now + bonus - damage_penalty
+
+    def land_eval(land):
+        """Score this land by option_value.
+
+        For non-fetches: option_value of spells castable when this land is
+        played, plus surveil/color bonuses.
+
+        For FETCHES — per user feedback, a fetch's value is the breadth of
+        outcomes it CAN reach: maybe a basic, maybe a shock of 2 colors,
+        maybe a surveil dual. Score the fetch by option_value across all
+        its potential targets in library: best target full weight, each
+        additional reachable target adds EXTRA_OPTION_WEIGHT × its score.
+        Captures: optionality of the fetch itself is value.
+        """
+        if library is not None and land in FETCH_TARGETS_FOR_PICK:
+            # Score the fetch by its actual best resolution. The fetch's
+            # BREADTH of options is captured separately at the deck-design
+            # level via color_reliability_score (which simulates many trials
+            # and naturally rewards flexible manabases). Within pick_land,
+            # we want a clean "best play this turn" picker.
+            target = _best_fetch_target(land, battlefield, library, spells_in_hand, hand, turn)
+            if target is not None:
+                opt_val = _score_target_outcome(target)
+                effective_produces = CARDS[target]["produces"]
+                effective_tapped = CARDS[target]["tapped"]
+            else:
+                opt_val = 0.0
+                effective_produces = CARDS[land]["produces"]
+                effective_tapped = False
+        else:
+            opt_val = _score_target_outcome(land)
+            effective_produces = CARDS[land]["produces"]
+            effective_tapped = CARDS[land]["tapped"]
 
         new_color_gain = len(set(effective_produces) - have_colors - {"C"})
         is_basic = CARDS[land]["basic"]
-
-        # Negate option_value so that lower-tuple = better in sort.
         if early_game:
             return (-opt_val, effective_tapped, -new_color_gain, not is_basic)
         else:

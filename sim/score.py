@@ -649,6 +649,13 @@ def color_reliability_score(deck_def, n=4000, return_parts=False, sim_result=Non
     # Blend tempo score in at 15% weight relative to the average above
     color_score = 0.85 * color_score + 0.15 * tempo_score
 
+    # Fetch flexibility bonus per user feedback: a fetch that can reach
+    # diverse outcomes (basic AND shock AND surveil dual) is more valuable
+    # than one with monotone targets. This rewards 2-1-1 + off-color fetch
+    # manabases over flat 4-4 shock-heavy bases at the deck-design level.
+    fetch_flex = _fetch_flexibility_bonus(deck_def)
+    color_score += fetch_flex
+
     if return_parts:
         return color_score, {
             "p_wur_t3": (p_wur_t3 / max(n_t3, 1)) * 100,
@@ -662,8 +669,49 @@ def color_reliability_score(deck_def, n=4000, return_parts=False, sim_result=Non
             "surveil_score": surveil_score,
             "avg_early_tap_lands": avg_early_tap,
             "tempo_score": tempo_score,
+            "fetch_flex": fetch_flex,
         }
     return color_score
+
+
+def _fetch_flexibility_bonus(deck_def):
+    """Score the average diversity of fetch targets across the deck's
+    fetches. Each fetch's 'option breadth' = distinct (kind, color-set)
+    of in-deck targets. Averaged across fetches in the deck.
+
+    Per user: 'a fetch can maybe get a basic, a shock of two colors, a
+    surveil dual — that's what matters.'
+    """
+    from simulate import CARDS, FETCH_TARGETS_FOR_PICK
+    total_diversity = 0.0
+    n_fetches = 0
+    for fetch_name, targets in FETCH_TARGETS_FOR_PICK.items():
+        n_in_deck = deck_def.get(fetch_name, 0)
+        if n_in_deck == 0:
+            continue
+        # Distinct (kind, frozenset(produces)) outcomes in deck
+        distinct = set()
+        for t in targets:
+            if deck_def.get(t, 0) > 0:
+                if t in SHOCK_LANDS:
+                    kind = "shock"
+                elif t in SURVEIL_DUAL_LANDS:
+                    kind = "surveil"
+                elif CARDS[t]["basic"]:
+                    kind = "basic"
+                else:
+                    kind = "other"
+                distinct.add((kind, frozenset(CARDS[t]["produces"])))
+        # Each fetch contributes its diversity (number of distinct outcomes)
+        # to the bonus, weighted by count.
+        total_diversity += n_in_deck * len(distinct)
+        n_fetches += n_in_deck
+    if n_fetches == 0:
+        return 0.0
+    avg_diversity = total_diversity / n_fetches
+    # 4 distinct outcomes per fetch = +4 points; 2 distinct = +2.
+    # Calibrated so the diversity bonus is meaningful but doesn't dominate.
+    return avg_diversity * 1.0
 
 
 def composite_score(deck_def, sim_result, weights=(0.40, 0.20, 0.10, 0.10, 0.20),
